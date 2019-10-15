@@ -198,6 +198,9 @@ func (c *Client) DoLogin(loginInfo *LoginInfo, loginDetails *creds.LoginDetails)
 	req.Header.Add("xsrf", loginInfo.Xsrf)
 
 	res, err := c.client.Do(req)
+	if res.StatusCode == 401 {
+		return errors.New("Incorrect email address or password")
+	}
 	if err != nil {
 		return errors.Wrap(err, "error retrieving login result")
 	}
@@ -446,57 +449,71 @@ func (c *Client) DoMFAVerify(loginInfo *LoginInfo, mfaInfo *MFAInfo) (string, er
 		logger.WithField("body", resp).Debug("the body of push result")
 	}
 
-	// the uuid of every totp method will be google, so don't display it
-	code := prompter.StringRequired(fmt.Sprintf(
-		"Enter verification code from %s", mfaInfo.Option))
+	retryCount := 0
+	for {
+		// the uuid of every totp method will be google, so don't display it
+		promptMsg := "Enter verification code [%s]"
+		if retryCount > 0 {
+			promptMsg = "Incorrect verification code, please enter again [%s]"
+		}
+		code := prompter.StringRequired(fmt.Sprintf(promptMsg, mfaInfo.Option))
 
-	verifyRequest := VerifyRequest{
-		Category: mfaInfo.Option,
-		Token: code,
-		UUID: mfaInfo.UUID,
+		verifyRequest := VerifyRequest{
+			Category: mfaInfo.Option,
+			Token: code,
+			UUID: mfaInfo.UUID,
+		}
+		verifyRequestBuf := new(bytes.Buffer)
+		err := json.NewEncoder(verifyRequestBuf).Encode(verifyRequest)
+		if err != nil {
+			return mfaResult, errors.Wrap(err, "error encoding verifyRequest")
+		}
+
+		verifyUrl := fmt.Sprintf("https://%s/api/v1/mfa/user/%s/token/verify", c.host, mfaInfo.Option)
+
+		req, err := http.NewRequest("POST", verifyUrl, verifyRequestBuf)
+		if err != nil {
+			return mfaResult, errors.Wrap(err, "error building verify request")
+		}
+
+		req.Header.Add("Content-Type", "application/json")
+		req.Header.Add("Origin", fmt.Sprintf("https://%s", c.host))
+		req.Header.Add("x-language", "english")
+		req.Header.Add("x-navigator-id", c.navigatorId)
+		req.Header.Add("xctx", loginInfo.Xctx)
+		req.Header.Add("xsrf", loginInfo.Xsrf)
+
+		res, err := c.client.Do(req)
+		if res.StatusCode == 400 {
+			retryCount += 1
+			if retryCount >= 5 {
+				return mfaResult, errors.New("Incorrect verification code")
+			} else {
+				continue
+			}
+		}
+		if err != nil {
+			return mfaResult, errors.Wrap(err, "error retrieving verify result")
+		}
+
+		body, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return mfaResult, errors.Wrap(err, "error retrieving body of verify result")
+		}
+
+		resp := string(body)
+		logger.WithField("body", resp).Debug("the body of verify result")
+
+		var verifyResponse VerifyResponse
+		err = json.Unmarshal(body, &verifyResponse)
+		if err != nil {
+			return mfaResult, errors.Wrap(err, "error unmarshaling json of verify result")
+		}
+
+		mfaResult = verifyResponse.Response.Body
+
+		return mfaResult, nil
 	}
-	verifyRequestBuf := new(bytes.Buffer)
-	err := json.NewEncoder(verifyRequestBuf).Encode(verifyRequest)
-	if err != nil {
-		return mfaResult, errors.Wrap(err, "error encoding verifyRequest")
-	}
-
-	verifyUrl := fmt.Sprintf("https://%s/api/v1/mfa/user/%s/token/verify", c.host, mfaInfo.Option)
-
-	req, err := http.NewRequest("POST", verifyUrl, verifyRequestBuf)
-	if err != nil {
-		return mfaResult, errors.Wrap(err, "error building verify request")
-	}
-
-	req.Header.Add("Content-Type", "application/json")
-	req.Header.Add("Origin", fmt.Sprintf("https://%s", c.host))
-	req.Header.Add("x-language", "english")
-	req.Header.Add("x-navigator-id", c.navigatorId)
-	req.Header.Add("xctx", loginInfo.Xctx)
-	req.Header.Add("xsrf", loginInfo.Xsrf)
-
-	res, err := c.client.Do(req)
-	if err != nil {
-		return mfaResult, errors.Wrap(err, "error retrieving verify result")
-	}
-
-	body, err := ioutil.ReadAll(res.Body)
-	if err != nil {
-		return mfaResult, errors.Wrap(err, "error retrieving body of verify result")
-	}
-
-	resp := string(body)
-	logger.WithField("body", resp).Debug("the body of verify result")
-
-	var verifyResponse VerifyResponse
-	err = json.Unmarshal(body, &verifyResponse)
-	if err != nil {
-		return mfaResult, errors.Wrap(err, "error unmarshaling json of verify result")
-	}
-
-	mfaResult = verifyResponse.Response.Body
-
-	return mfaResult, nil
 }
 
 // GetSAMLResponse will:
