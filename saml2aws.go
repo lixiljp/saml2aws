@@ -27,7 +27,7 @@ type ProviderList map[string][]string
 
 // MFAsByProvider a list of providers with their respective supported MFAs
 var MFAsByProvider = ProviderList{
-	"AzureAD":    []string{"Auto", "PhoneAppOTP", "PhoneAppNotification"},
+	"AzureAD":    []string{"Auto", "PhoneAppOTP", "PhoneAppNotification", "OneWaySMS"},
 	"ADFS":       []string{"Auto", "VIP"},
 	"ADFS2":      []string{"Auto", "RSA"}, // nothing automatic about ADFS 2.x
 	"EAA":        []string{"Auto", "SMS", "TOTP"},
