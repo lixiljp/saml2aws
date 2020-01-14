@@ -236,17 +236,18 @@ func (c *Client) GetAppInfo(loginInfo *LoginInfo) (AppInfo, error) {
 	req.Header.Add("xsrf", loginInfo.Xsrf)
 
 	res, err := c.client.Do(req)
+
+	body, bodyErr := ioutil.ReadAll(res.Body)
+	resp := string(body)
+	logger.WithField("body", resp).Debug("the body of get apps result")
+
 	if err != nil {
 		return appInfo, errors.Wrap(err, "error retrieving apps")
 	}
 
-	body, err := ioutil.ReadAll(res.Body)
-	if err != nil {
-		return appInfo, errors.Wrap(err, "error retrieving body of apps")
+	if bodyErr != nil {
+		return appInfo, errors.Wrap(bodyErr, "error retrieving body of apps")
 	}
-
-	resp := string(body)
-	logger.WithField("body", resp).Debug("the body of get apps result")
 
 	var appsResponse AppsResponse
 	err = json.Unmarshal(body, &appsResponse)
