@@ -79,9 +79,11 @@ func Login(loginFlags *flags.LoginExecFlags) error {
 		os.Exit(1)
 	}
 
-	err = credentials.SaveCredentials(loginDetails.URL, loginDetails.Username, loginDetails.Password)
-	if err != nil {
-		return errors.Wrap(err, "error storing password in keychain")
+	if !loginFlags.CommonFlags.DisableKeychain {
+		err = credentials.SaveCredentials(loginDetails.URL, loginDetails.Username, loginDetails.Password)
+		if err != nil {
+			return errors.Wrap(err, "error storing password in keychain")
+		}
 	}
 
 	role, err := selectAwsRole(samlAssertion, account)
@@ -129,10 +131,13 @@ func resolveLoginDetails(account *cfg.IDPAccount, loginFlags *flags.LoginExecFla
 
 	fmt.Printf("Using IDP Account %s to access %s %s\n", loginFlags.CommonFlags.IdpAccount, account.Provider, account.URL)
 
-	err := credentials.LookupCredentials(loginDetails, account.Provider)
-	if err != nil {
-		if !credentials.IsErrCredentialsNotFound(err) {
-			return nil, errors.Wrap(err, "error loading saved password")
+	var err error
+	if !loginFlags.CommonFlags.DisableKeychain {
+		err = credentials.LookupCredentials(loginDetails, account.Provider)
+		if err != nil {
+			if !credentials.IsErrCredentialsNotFound(err) {
+				return nil, errors.Wrap(err, "error loading saved password")
+			}
 		}
 	}
 
@@ -146,6 +151,16 @@ func resolveLoginDetails(account *cfg.IDPAccount, loginFlags *flags.LoginExecFla
 	// if you supply a password in a flag it takes precedence
 	if loginFlags.CommonFlags.Password != "" {
 		loginDetails.Password = loginFlags.CommonFlags.Password
+	}
+
+	// if you supply a cleint_id in a flag it takes precedence
+	if loginFlags.CommonFlags.ClientID != "" {
+		loginDetails.ClientID = loginFlags.CommonFlags.ClientID
+	}
+
+	// if you supply a client_secret in a flag it takes precedence
+	if loginFlags.CommonFlags.ClientSecret != "" {
+		loginDetails.ClientSecret = loginFlags.CommonFlags.ClientSecret
 	}
 
 	// fmt.Printf("loginDetails %+v\n", loginDetails)
