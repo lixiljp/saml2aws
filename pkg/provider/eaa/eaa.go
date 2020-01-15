@@ -29,6 +29,7 @@ type Client struct {
 	mfa         string
 	host        string // hostname of login url
 	navigatorId string // dummy browser fingerprint
+	requireMFABeforeListApp bool
 }
 
 // LoginInfo contains xsrf tokens from EAA login page
@@ -43,6 +44,15 @@ type LoginRequest struct {
 	Navigator string `json:"navigator"`
 	Username  string `json:"username"`
 	Password  string `json:"password"`
+}
+
+// LoginResponse contains response fields for EAA login api
+type LoginResponse struct {
+	MFA struct {
+		App struct {
+			Enable bool `json:"enable"`
+		} `json:"app"`
+	} `json:"mfa"`
 }
 
 // AppInfo contains information of a single app from EAA apps
@@ -65,6 +75,7 @@ type NavigateRequest struct {
 type NavigateResponse struct {
 	Navigate struct {
 		Url string `json:"url"`
+		Body string `json:"body"`
 	} `json:"navigate"`
 }
 
@@ -213,6 +224,13 @@ func (c *Client) DoLogin(loginInfo *LoginInfo, loginDetails *creds.LoginDetails)
 	resp := string(body)
 	logger.WithField("body", resp).Debug("the body of login result")
 
+	var loginResponse LoginResponse
+	err = json.Unmarshal(body, &loginResponse)
+	if err != nil {
+		return errors.Wrap(err, "error unmarshaling json of login result")
+	}
+	c.requireMFABeforeListApp = loginResponse.MFA.App.Enable
+
 	return nil
 }
 
@@ -269,26 +287,23 @@ func (c *Client) GetAppInfo(loginInfo *LoginInfo) (AppInfo, error) {
 	return appInfo, nil
 }
 
-// GetMFAInfo will:
+// DoNavigate will:
 // call /api/v2/apps/navigate => get nativate url from json =>
-// get mfa info from html =>
-// call /api/v1/mfa/token/settings => get verify method and target from json
-func (c *Client) GetMFAInfo(loginInfo *LoginInfo, appInfo *AppInfo) (MFAInfo, error) {
-
-	var mfaInfo MFAInfo
+// get navigate info from html
+func (c *Client) DoNavigate(loginInfo *LoginInfo, appInfo *AppInfo) (string, error) {
 
 	navigateRequest := NavigateRequest{Hostname: appInfo.Hostname}
 	navigateRequestBuf := new(bytes.Buffer)
 	err := json.NewEncoder(navigateRequestBuf).Encode(navigateRequest)
 	if err != nil {
-		return mfaInfo, errors.Wrap(err, "error encoding navigateRequest")
+		return "", errors.Wrap(err, "error encoding navigateRequest")
 	}
 
 	navigateUrl := fmt.Sprintf("https://%s/api/v2/apps/navigate", c.host)
 
 	req, err := http.NewRequest("POST", navigateUrl, navigateRequestBuf)
 	if err != nil {
-		return mfaInfo, errors.Wrap(err, "error building navigate request")
+		return "", errors.Wrap(err, "error building navigate request")
 	}
 
 	req.Header.Add("Content-Type", "application/json")
@@ -300,12 +315,12 @@ func (c *Client) GetMFAInfo(loginInfo *LoginInfo, appInfo *AppInfo) (MFAInfo, er
 
 	res, err := c.client.Do(req)
 	if err != nil {
-		return mfaInfo, errors.Wrap(err, "error retrieving navigate result")
+		return "", errors.Wrap(err, "error retrieving navigate result")
 	}
 
 	body, err := ioutil.ReadAll(res.Body)
 	if err != nil {
-		return mfaInfo, errors.Wrap(err, "error retrieving body of navigate result")
+		return "", errors.Wrap(err, "error retrieving body of navigate result")
 	}
 
 	resp := string(body)
@@ -314,24 +329,28 @@ func (c *Client) GetMFAInfo(loginInfo *LoginInfo, appInfo *AppInfo) (MFAInfo, er
 	var navigateResponse NavigateResponse
 	err = json.Unmarshal(body, &navigateResponse)
 	if err != nil {
-		return mfaInfo, errors.Wrap(err, "error unmarshaling json of navigate result")
+		return "", errors.Wrap(err, "error unmarshaling json of navigate result")
+	}
+
+	if navigateResponse.Navigate.Body != "" {
+		return navigateResponse.Navigate.Body, nil
 	}
 
 	navigatePageUrl := fmt.Sprintf("https://%s%s", c.host, navigateResponse.Navigate.Url)
 
 	req, err = http.NewRequest("GET", navigatePageUrl, nil)
 	if err != nil {
-		return mfaInfo, errors.Wrap(err, "error building navigate page request")
+		return "", errors.Wrap(err, "error building navigate page request")
 	}
 
 	res, err = c.client.Do(req)
 	if err != nil {
-		return mfaInfo, errors.Wrap(err, "error retrieving navigate page")
+		return "", errors.Wrap(err, "error retrieving navigate page")
 	}
 
 	body, err = ioutil.ReadAll(res.Body)
 	if err != nil {
-		return mfaInfo, errors.Wrap(err, "error retrieving body from navigate page")
+		return "", errors.Wrap(err, "error retrieving body from navigate page")
 	}
 
 	resp = string(body)
@@ -346,9 +365,18 @@ func (c *Client) GetMFAInfo(loginInfo *LoginInfo, appInfo *AppInfo) (MFAInfo, er
 		WithField("xversion", loginInfo.Xversion).
 		Debug("the xsrf tokens from navigate page (updates loginInfo)")
 
+	return resp, nil
+}
+
+// GetMFAInfo will:
+// call /api/v1/mfa/token/settings => get verify method and target from json
+func (c *Client) GetMFAInfo(loginInfo *LoginInfo) (MFAInfo, error) {
+
+	var mfaInfo MFAInfo
+
 	getMFASettingsUrl := fmt.Sprintf("https://%s/api/v1/mfa/token/settings", c.host)
 
-	req, err = http.NewRequest("GET", getMFASettingsUrl, nil)
+	req, err := http.NewRequest("GET", getMFASettingsUrl, nil)
 	if err != nil {
 		return mfaInfo, errors.Wrap(err, "error building get MFA settings request")
 	}
@@ -359,17 +387,17 @@ func (c *Client) GetMFAInfo(loginInfo *LoginInfo, appInfo *AppInfo) (MFAInfo, er
 	req.Header.Add("xctx", loginInfo.Xctx)
 	req.Header.Add("xsrf", loginInfo.Xsrf)
 
-	res, err = c.client.Do(req)
+	res, err := c.client.Do(req)
 	if err != nil {
 		return mfaInfo, errors.Wrap(err, "error retrieving MFA settings")
 	}
 
-	body, err = ioutil.ReadAll(res.Body)
+	body, err := ioutil.ReadAll(res.Body)
 	if err != nil {
 		return mfaInfo, errors.Wrap(err, "error retrieving body from MFA settings")
 	}
 
-	resp = string(body)
+	resp := string(body)
 	logger.WithField("body", resp).Debug("the body from get MFA settings result")
 
 	var mfaSettingsResponse MFASettingsResponse
@@ -558,19 +586,44 @@ func (c *Client) Authenticate(loginDetails *creds.LoginDetails) (string, error) 
 		return samlAssertion, errors.Wrap(err, "error doing login")
 	}
 
-	appInfo, err := c.GetAppInfo(&loginInfo)
-	if err != nil {
-		return samlAssertion, errors.Wrap(err, "error getting app information")
-	}
-
-	mfaInfo, err := c.GetMFAInfo(&loginInfo, &appInfo)
+	mfaInfo, err := c.GetMFAInfo(&loginInfo)
 	if err != nil {
 		return samlAssertion, errors.Wrap(err, "error getting MFA information")
 	}
 
-	mfaResult, err := c.DoMFAVerify(&loginInfo, &mfaInfo)
-	if err != nil {
-		return samlAssertion, errors.Wrap(err, "error doing MFA verify")
+	var mfaResult string
+
+	if c.requireMFABeforeListApp {
+		_, err := c.DoMFAVerify(&loginInfo, &mfaInfo)
+		if err != nil {
+			return samlAssertion, errors.Wrap(err, "error doing MFA verify")
+		}
+
+		appInfo, err := c.GetAppInfo(&loginInfo)
+		if err != nil {
+			return samlAssertion, errors.Wrap(err, "error getting app information")
+		}
+
+		mfaResult, err = c.DoNavigate(&loginInfo, &appInfo)
+		if err != nil {
+			return samlAssertion, errors.Wrap(err, "error doing navigate")
+		}
+
+	} else {
+		appInfo, err := c.GetAppInfo(&loginInfo)
+		if err != nil {
+			return samlAssertion, errors.Wrap(err, "error getting app information")
+		}
+
+		_, err = c.DoNavigate(&loginInfo, &appInfo)
+		if err != nil {
+			return samlAssertion, errors.Wrap(err, "error doing navigate")
+		}
+
+		mfaResult, err = c.DoMFAVerify(&loginInfo, &mfaInfo)
+		if err != nil {
+			return samlAssertion, errors.Wrap(err, "error doing MFA verify")
+		}
 	}
 
 	samlAssertion, err = c.GetSAMLResponse(mfaResult)
