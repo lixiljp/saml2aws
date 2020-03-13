@@ -35,6 +35,7 @@ type Client struct {
 // LoginInfo contains xsrf tokens from EAA login page
 type LoginInfo struct {
 	Xsrf     string
+	Xsrfid   string
 	Xctx     string
 	Xversion string
 }
@@ -115,6 +116,7 @@ type VerifyResponse struct {
 
 var logger = logrus.WithField("provider", "eaa")
 var xsrfExp = regexp.MustCompile(`<input.+?id="xsrf".+?value="(.+?)"`)
+var xsrfidExp = regexp.MustCompile(`<input.+?id="xsrfid".+?value="(.+?)"`)
 var xctxExp = regexp.MustCompile(`<input.+?id="xctx".+?value="(.+?)"`)
 var xversionExp = regexp.MustCompile(`<input.+?id="xversion".+?value="(.+?)"`)
 var samlResponseExp = regexp.MustCompile(`<input.+?name="SAMLResponse".+?value="(.+?)"`)
@@ -167,10 +169,12 @@ func (c *Client) GetLoginInfo() (LoginInfo, error) {
 	logger.WithField("body", resp).Debug("the body from login page")
 
 	loginInfo.Xsrf = xsrfExp.FindStringSubmatch(resp)[1]
+	loginInfo.Xsrfid = xsrfidExp.FindStringSubmatch(resp)[1]
 	loginInfo.Xctx = xctxExp.FindStringSubmatch(resp)[1]
 	loginInfo.Xversion = xversionExp.FindStringSubmatch(resp)[1]
 
 	logger.WithField("xsrf", loginInfo.Xsrf).
+		WithField("xsrfid", loginInfo.Xsrfid).
 		WithField("xctx", loginInfo.Xctx).
 		WithField("xversion", loginInfo.Xversion).
 		Debug("the xsrf tokens from login page")
@@ -207,14 +211,11 @@ func (c *Client) DoLogin(loginInfo *LoginInfo, loginDetails *creds.LoginDetails)
 	req.Header.Add("x-navigator-id", c.navigatorId)
 	req.Header.Add("xctx", loginInfo.Xctx)
 	req.Header.Add("xsrf", loginInfo.Xsrf)
+	req.Header.Add("xsrfid", loginInfo.Xsrfid)
+
+	logger.WithField("cookie", c.client.Client.Jar).Debug("cookie jar")
 
 	res, err := c.client.Do(req)
-	if res.StatusCode == 401 {
-		return errors.New("Incorrect email address or password")
-	}
-	if err != nil {
-		return errors.Wrap(err, "error retrieving login result")
-	}
 
 	body, err := ioutil.ReadAll(res.Body)
 	if err != nil {
@@ -223,6 +224,13 @@ func (c *Client) DoLogin(loginInfo *LoginInfo, loginDetails *creds.LoginDetails)
 
 	resp := string(body)
 	logger.WithField("body", resp).Debug("the body of login result")
+
+	if res.StatusCode == 401 {
+		return errors.New("Incorrect email address or password")
+	}
+	if err != nil {
+		return errors.Wrap(err, "error retrieving login result")
+	}
 
 	var loginResponse LoginResponse
 	err = json.Unmarshal(body, &loginResponse)
@@ -252,6 +260,7 @@ func (c *Client) GetAppInfo(loginInfo *LoginInfo) (AppInfo, error) {
 	req.Header.Add("x-navigator-id", c.navigatorId)
 	req.Header.Add("xctx", loginInfo.Xctx)
 	req.Header.Add("xsrf", loginInfo.Xsrf)
+	req.Header.Add("xsrfid", loginInfo.Xsrfid)
 
 	res, err := c.client.Do(req)
 
@@ -312,6 +321,7 @@ func (c *Client) DoNavigate(loginInfo *LoginInfo, appInfo *AppInfo) (string, err
 	req.Header.Add("x-navigator-id", c.navigatorId)
 	req.Header.Add("xctx", loginInfo.Xctx)
 	req.Header.Add("xsrf", loginInfo.Xsrf)
+	req.Header.Add("xsrfid", loginInfo.Xsrfid)
 
 	res, err := c.client.Do(req)
 	if err != nil {
@@ -357,10 +367,12 @@ func (c *Client) DoNavigate(loginInfo *LoginInfo, appInfo *AppInfo) (string, err
 	logger.WithField("body", resp).Debug("the body from navigate page")
 
 	loginInfo.Xsrf = xsrfExp.FindStringSubmatch(resp)[1]
+	loginInfo.Xsrfid = xsrfidExp.FindStringSubmatch(resp)[1]
 	loginInfo.Xctx = xctxExp.FindStringSubmatch(resp)[1]
 	loginInfo.Xversion = xversionExp.FindStringSubmatch(resp)[1]
 
 	logger.WithField("xsrf", loginInfo.Xsrf).
+		WithField("xsrfid", loginInfo.Xsrfid).
 		WithField("xctx", loginInfo.Xctx).
 		WithField("xversion", loginInfo.Xversion).
 		Debug("the xsrf tokens from navigate page (updates loginInfo)")
@@ -386,6 +398,7 @@ func (c *Client) GetMFAInfo(loginInfo *LoginInfo) (MFAInfo, error) {
 	req.Header.Add("x-navigator-id", c.navigatorId)
 	req.Header.Add("xctx", loginInfo.Xctx)
 	req.Header.Add("xsrf", loginInfo.Xsrf)
+	req.Header.Add("xsrfid", loginInfo.Xsrfid)
 
 	res, err := c.client.Do(req)
 	if err != nil {
@@ -463,6 +476,7 @@ func (c *Client) DoMFAVerify(loginInfo *LoginInfo, mfaInfo *MFAInfo) (string, er
 		req.Header.Add("x-navigator-id", c.navigatorId)
 		req.Header.Add("xctx", loginInfo.Xctx)
 		req.Header.Add("xsrf", loginInfo.Xsrf)
+		req.Header.Add("xsrfid", loginInfo.Xsrfid)
 
 		res, err := c.client.Do(req)
 		if err != nil {
@@ -511,16 +525,9 @@ func (c *Client) DoMFAVerify(loginInfo *LoginInfo, mfaInfo *MFAInfo) (string, er
 		req.Header.Add("x-navigator-id", c.navigatorId)
 		req.Header.Add("xctx", loginInfo.Xctx)
 		req.Header.Add("xsrf", loginInfo.Xsrf)
+		req.Header.Add("xsrfid", loginInfo.Xsrfid)
 
 		res, err := c.client.Do(req)
-		if res.StatusCode == 400 {
-			retryCount += 1
-			if retryCount >= 5 {
-				return mfaResult, errors.New("Incorrect verification code")
-			} else {
-				continue
-			}
-		}
 		if err != nil {
 			return mfaResult, errors.Wrap(err, "error retrieving verify result")
 		}
@@ -532,6 +539,15 @@ func (c *Client) DoMFAVerify(loginInfo *LoginInfo, mfaInfo *MFAInfo) (string, er
 
 		resp := string(body)
 		logger.WithField("body", resp).Debug("the body of verify result")
+
+		if res.StatusCode == 400 {
+			retryCount += 1
+			if retryCount >= 5 {
+				return mfaResult, errors.New("Incorrect verification code")
+			} else {
+				continue
+			}
+		}
 
 		var verifyResponse VerifyResponse
 		err = json.Unmarshal(body, &verifyResponse)
