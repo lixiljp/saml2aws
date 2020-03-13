@@ -132,9 +132,8 @@ func New(idpAccount *cfg.IDPAccount) (*Client, error) {
 		return nil, errors.Wrap(err, "error building http client")
 	}
 
-	// assign a response validator to ensure all responses are either success or a redirect
-	// this is to avoid have explicit checks for every single response
-	client.CheckResponseStatus = provider.SuccessOrRedirectResponseValidator
+	// we need to print response body before check status for debugging
+	// client.CheckResponseStatus = provider.SuccessOrRedirectResponseValidator
 
 	return &Client{
 		client: client,
@@ -426,8 +425,11 @@ func (c *Client) GetMFAInfo(loginInfo *LoginInfo) (MFAInfo, error) {
 	}
 
 	if mfaOption == "sms" {
-		mfaInfo.Option = "sms"
-		mfaInfo.Target = "sms"
+		mfaInfo.Option = "phone"
+		mfaInfo.UUID = mfaSettingsResponse.MFA.Settings["sms"].
+			([]interface{})[0].
+			(map[string]interface{})["uuid"].(string)
+		mfaInfo.Target = "phone"
 	} else if mfaOption == "totp" {
 		mfaInfo.Option = "totp"
 		mfaInfo.UUID = mfaSettingsResponse.MFA.Settings["totp"].
