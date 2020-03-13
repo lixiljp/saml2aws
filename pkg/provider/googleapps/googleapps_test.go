@@ -11,6 +11,7 @@ import (
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/stretchr/testify/require"
+	"github.com/versent/saml2aws/pkg/creds"
 	"github.com/versent/saml2aws/pkg/provider"
 )
 
@@ -29,6 +30,12 @@ func TestExtractInputsByFormQuery(t *testing.T) {
 
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
 	require.Nil(t, err)
+
+	doc.Url = &url.URL{
+		Scheme: "https",
+		Host: "google.com",
+		Path: "foobar",
+	}
 
 	form, actionURL, err := extractInputsByFormQuery(doc, "#dev")
 	require.Nil(t, err)
@@ -81,10 +88,10 @@ func TestChallengePage(t *testing.T) {
 	defer ts.Close()
 
 	kc := Client{client: &provider.HTTPClient{Client: http.Client{}}}
-	// loginDetails := &creds.LoginDetails{URL: ts.URL, Username: "test", Password: "test123"}
+	loginDetails := &creds.LoginDetails{URL: ts.URL, Username: "test", Password: "test123"}
 	authForm := url.Values{}
 
-	challengeDoc, err := kc.loadChallengePage(ts.URL, "https://accounts.google.com/signin/challenge/sl/password", authForm)
+	challengeDoc, err := kc.loadChallengePage(ts.URL, "https://accounts.google.com/signin/challenge/sl/password", authForm, loginDetails)
 	require.Nil(t, err)
 	require.NotNil(t, challengeDoc)
 }
