@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"html"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -34,7 +35,7 @@ func New(idpAccount *cfg.IDPAccount) (*Client, error) {
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: idpAccount.SkipVerify, Renegotiation: tls.RenegotiateFreelyAsClient},
 	}
 
-	client, err := provider.NewHTTPClient(tr)
+	client, err := provider.NewHTTPClient(tr, provider.BuildHttpClientOpts(idpAccount))
 	if err != nil {
 		return nil, errors.Wrap(err, "error building http client")
 	}
@@ -198,12 +199,22 @@ func verifyDuoMfa(oc *Client, duoHost string, parent string, tx string) (string,
 		return "", errors.Wrap(err, "error retrieving verify response")
 	}
 
-	//try to extract sid
+	// retrieve response from post
 	doc, err := goquery.NewDocumentFromResponse(res)
 	if err != nil {
 		return "", errors.Wrap(err, "error parsing document")
 	}
 
+	// Duo cookie is returned here if mfa bypassed - immediatly return it if found
+	duoTxCookie, ok := doc.Find("input[name=\"js_cookie\"]").Attr("value")
+	if ok {
+		if duoTxCookie == "" {
+			return "", errors.Wrap(err, "duoMfaBypass: invalid response cookie")
+		}
+		return duoTxCookie, nil
+	}
+
+	// Duo cookie not found - continue with full MFA transaction
 	duoSID, ok := doc.Find("input[name=\"sid\"]").Attr("value")
 	if !ok {
 		return "", errors.Wrap(err, "unable to locate saml response")
@@ -294,7 +305,7 @@ func verifyDuoMfa(oc *Client, duoHost string, parent string, tx string) (string,
 	duoTxResult := gjson.Get(resp, "response.result").String()
 	duoResultURL := gjson.Get(resp, "response.result_url").String()
 
-	fmt.Println(gjson.Get(resp, "response.status").String())
+	log.Println(gjson.Get(resp, "response.status").String())
 
 	if duoTxResult != "SUCCESS" {
 		//poll as this is likely a push request
@@ -323,7 +334,7 @@ func verifyDuoMfa(oc *Client, duoHost string, parent string, tx string) (string,
 			duoTxResult = gjson.Get(resp, "response.result").String()
 			duoResultURL = gjson.Get(resp, "response.result_url").String()
 
-			fmt.Println(gjson.Get(resp, "response.status").String())
+			log.Println(gjson.Get(resp, "response.status").String())
 
 			if duoTxResult == "FAILURE" {
 				return "", errors.Wrap(err, "failed to authenticate device")
@@ -355,7 +366,7 @@ func verifyDuoMfa(oc *Client, duoHost string, parent string, tx string) (string,
 
 	resp = string(body)
 
-	duoTxCookie := gjson.Get(resp, "response.cookie").String()
+	duoTxCookie = gjson.Get(resp, "response.cookie").String()
 	if duoTxCookie == "" {
 		return "", errors.Wrap(err, "duoResultSubmit: Unable to get response.cookie")
 	}

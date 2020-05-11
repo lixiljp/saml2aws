@@ -1,8 +1,8 @@
 package commands
 
 import (
-	"encoding/base64"
-	"fmt"
+	b64 "encoding/base64"
+	"log"
 	"os"
 
 	"github.com/pkg/errors"
@@ -12,7 +12,7 @@ import (
 	"github.com/versent/saml2aws/pkg/flags"
 )
 
-// List will list available role ARNs
+// ListRoles will list available role ARNs
 func ListRoles(loginFlags *flags.LoginExecFlags) error {
 
 	logger := logrus.WithField("command", "list")
@@ -24,7 +24,7 @@ func ListRoles(loginFlags *flags.LoginExecFlags) error {
 
 	loginDetails, err := resolveLoginDetails(account, loginFlags)
 	if err != nil {
-		fmt.Printf("%+v\n", err)
+		log.Printf("%+v", err)
 		os.Exit(1)
 	}
 
@@ -47,9 +47,9 @@ func ListRoles(loginFlags *flags.LoginExecFlags) error {
 	}
 
 	if samlAssertion == "" {
-		fmt.Println("Response did not contain a valid SAML assertion")
-		fmt.Println("Please check your username and password is correct")
-		fmt.Println("To see the output follow the instructions in https://github.com/Versent/saml2aws#debugging-issues-with-idps")
+		log.Println("Response did not contain a valid SAML assertion")
+		log.Println("Please check your username and password is correct")
+		log.Println("To see the output follow the instructions in https://github.com/Versent/saml2aws#debugging-issues-with-idps")
 		os.Exit(1)
 	}
 
@@ -60,7 +60,7 @@ func ListRoles(loginFlags *flags.LoginExecFlags) error {
 		}
 	}
 
-	data, err := base64.StdEncoding.DecodeString(samlAssertion)
+	data, err := b64.StdEncoding.DecodeString(samlAssertion)
 	if err != nil {
 		return errors.Wrap(err, "error decoding saml assertion")
 	}
@@ -71,7 +71,7 @@ func ListRoles(loginFlags *flags.LoginExecFlags) error {
 	}
 
 	if len(roles) == 0 {
-		fmt.Println("No roles to assume")
+		log.Println("No roles to assume")
 		os.Exit(1)
 	}
 
@@ -88,20 +88,39 @@ func ListRoles(loginFlags *flags.LoginExecFlags) error {
 }
 
 func listRoles(awsRoles []*saml2aws.AWSRole, samlAssertion string, loginFlags *flags.LoginExecFlags) error {
-	awsAccounts, err := saml2aws.ParseAWSAccounts(samlAssertion)
+	if len(awsRoles) == 1 {
+		log.Println("")
+		log.Println("Only one role to assume. Will be automatically assumed on login")
+		log.Println(awsRoles[0].RoleARN)
+		return nil
+	} else if len(awsRoles) == 0 {
+		return errors.New("no roles available")
+	}
+
+	samlAssertionData, err := b64.StdEncoding.DecodeString(samlAssertion)
+	if err != nil {
+		return errors.Wrap(err, "error decoding saml assertion")
+	}
+
+	aud, err := saml2aws.ExtractDestinationURL(samlAssertionData)
+	if err != nil {
+		return errors.Wrap(err, "error parsing destination url")
+	}
+
+	awsAccounts, err := saml2aws.ParseAWSAccounts(aud, samlAssertion)
 	if err != nil {
 		return errors.Wrap(err, "error parsing aws role accounts")
 	}
 
 	saml2aws.AssignPrincipals(awsRoles, awsAccounts)
 
-	fmt.Println("")
+	log.Println("")
 	for _, account := range awsAccounts {
-		fmt.Println(account.Name)
+		log.Println(account.Name)
 		for _, role := range account.Roles {
-			fmt.Println(role.RoleARN)
+			log.Println(role.RoleARN)
 		}
-		fmt.Println("")
+		log.Println("")
 	}
 
 	return nil

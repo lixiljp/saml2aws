@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"html"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -35,6 +36,7 @@ const (
 	IdentifierOktaTotpMfa     = "OKTA TOKEN:SOFTWARE:TOTP"
 	IdentifierSymantecTotpMfa = "SYMANTEC TOKEN"
 	IdentifierFIDOWebAuthn    = "FIDO WEBAUTHN"
+	IdentifierYubiMfa         = "YUBICO TOKEN:HARDWARE"
 )
 
 var logger = logrus.WithField("provider", "okta")
@@ -48,6 +50,7 @@ var (
 		IdentifierOktaTotpMfa:     "Okta MFA authentication",
 		IdentifierSymantecTotpMfa: "Symantec VIP MFA authentication",
 		IdentifierFIDOWebAuthn:    "FIDO WebAuthn MFA authentication",
+		IdentifierYubiMfa:         "YUBICO TOKEN:HARDWARE",
 	}
 )
 
@@ -75,7 +78,7 @@ func New(idpAccount *cfg.IDPAccount) (*Client, error) {
 
 	tr := provider.NewDefaultTransport(idpAccount.SkipVerify)
 
-	client, err := provider.NewHTTPClient(tr)
+	client, err := provider.NewHTTPClient(tr, provider.BuildHttpClientOpts(idpAccount))
 	if err != nil {
 		return nil, errors.Wrap(err, "error building http client")
 	}
@@ -267,7 +270,17 @@ func docIsFormResume(doc *goquery.Document) bool {
 }
 
 func docIsFormRedirectToAWS(doc *goquery.Document) bool {
-	return doc.Find("form[action=\"https://signin.aws.amazon.com/saml\"]").Size() == 1
+	urls := []string{"form[action=\"https://signin.aws.amazon.com/saml\"]",
+		"form[action=\"https://signin.amazonaws-us-gov.com/saml\"]",
+		"form[action=\"https://signin.amazonaws.cn/saml\"]",
+	}
+
+	for _, value := range urls {
+		if doc.Find(value).Size() > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func extractSAMLResponse(doc *goquery.Document) (v string, ok bool) {
@@ -292,7 +305,7 @@ func verifyMfa(oc *Client, oktaOrgHost string, loginDetails *creds.LoginDetails,
 
 	if strings.ToUpper(oc.mfa) != "AUTO" {
 		for idx, val := range mfaOptions {
-			if strings.HasPrefix(val, oc.mfa) {
+			if strings.HasPrefix(strings.ToUpper(val), oc.mfa) {
 				mfaOption = idx
 				break
 			}
@@ -314,6 +327,17 @@ func verifyMfa(oc *Client, oktaOrgHost string, loginDetails *creds.LoginDetails,
 	// get signature & callback
 	verifyReq := VerifyRequest{StateToken: stateToken}
 	verifyBody := new(bytes.Buffer)
+
+	// Login flow is different for YubiKeys ( of course )
+	// https://developer.okta.com/docs/reference/api/factors/#request-example-for-verify-yubikey-factor
+	// verifyBody needs to be a json document with the OTP from the yubikey in it.
+	// yay
+	switch mfa := mfaIdentifer; mfa {
+	case IdentifierYubiMfa:
+		verifyCode := prompter.Password("Press the button on your yubikey")
+		verifyReq.PassCode = verifyCode
+	}
+
 	err := json.NewEncoder(verifyBody).Encode(verifyReq)
 	if err != nil {
 		return "", errors.Wrap(err, "error encoding verifyReq")
@@ -339,6 +363,8 @@ func verifyMfa(oc *Client, oktaOrgHost string, loginDetails *creds.LoginDetails,
 	resp = string(body)
 
 	switch mfa := mfaIdentifer; mfa {
+	case IdentifierYubiMfa:
+		return gjson.Get(resp, "sessionToken").String(), nil
 	case IdentifierSmsMfa, IdentifierTotpMfa, IdentifierOktaTotpMfa, IdentifierSymantecTotpMfa:
 		var verifyCode = loginDetails.MFAToken
 		if verifyCode == "" {
@@ -557,7 +583,7 @@ func verifyMfa(oc *Client, oktaOrgHost string, loginDetails *creds.LoginDetails,
 		duoTxResult := gjson.Get(resp, "response.result").String()
 		duoResultURL := gjson.Get(resp, "response.result_url").String()
 
-		fmt.Println(gjson.Get(resp, "response.status").String())
+		log.Println(gjson.Get(resp, "response.status").String())
 
 		if duoTxResult != "SUCCESS" {
 			//poll as this is likely a push request
@@ -586,7 +612,7 @@ func verifyMfa(oc *Client, oktaOrgHost string, loginDetails *creds.LoginDetails,
 				duoTxResult = gjson.Get(resp, "response.result").String()
 				duoResultURL = gjson.Get(resp, "response.result_url").String()
 
-				fmt.Println(gjson.Get(resp, "response.status").String())
+				log.Println(gjson.Get(resp, "response.status").String())
 
 				if duoTxResult == "FAILURE" {
 					return "", errors.Wrap(err, "failed to authenticate device")

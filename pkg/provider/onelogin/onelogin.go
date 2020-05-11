@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -24,6 +25,7 @@ const (
 	IdentifierOneLoginProtectMfa = "OneLogin Protect"
 	IdentifierSmsMfa             = "OneLogin SMS"
 	IdentifierTotpMfa            = "Google Authenticator"
+	IdentifierYubiKey            = "Yubico YubiKey"
 
 	MessageMFARequired = "MFA is required for this user"
 	MessageSuccess     = "Success"
@@ -41,6 +43,7 @@ var (
 		IdentifierOneLoginProtectMfa: "OLP",
 		IdentifierSmsMfa:             "SMS",
 		IdentifierTotpMfa:            "TOTP",
+		IdentifierYubiKey:            "YUBIKEY",
 	}
 )
 
@@ -77,7 +80,7 @@ type VerifyRequest struct {
 // New creates a new OneLogin client.
 func New(idpAccount *cfg.IDPAccount) (*Client, error) {
 	tr := provider.NewDefaultTransport(idpAccount.SkipVerify)
-	client, err := provider.NewHTTPClient(tr)
+	client, err := provider.NewHTTPClient(tr, provider.BuildHttpClientOpts(idpAccount))
 	if err != nil {
 		return nil, errors.Wrap(err, "error building http client")
 	}
@@ -240,8 +243,12 @@ func verifyMFA(oc *Client, oauthToken, appID, resp string) (string, error) {
 		return "", errors.New("unsupported mfa provider")
 	}
 
-	// TOTP MFA doesn't need additional request (e.g. to send SMS or a push notification etc) since the user can generate the code using their MFA app of choice.
-	if mfaIdentifer != IdentifierTotpMfa {
+	switch mfaIdentifer {
+	// These MFA options doesn't need additional request (e.g. to send SMS or a push notification etc) since the user can generate the code using their MFA app of choice.
+	case IdentifierTotpMfa, IdentifierYubiKey:
+		break
+
+	default:
 		var verifyBody bytes.Buffer
 		err := json.NewEncoder(&verifyBody).Encode(VerifyRequest{AppID: appID, DeviceID: mfaDeviceID, StateToken: stateToken})
 		if err != nil {
@@ -272,7 +279,7 @@ func verifyMFA(oc *Client, oauthToken, appID, resp string) (string, error) {
 	}
 
 	switch mfaIdentifer {
-	case IdentifierSmsMfa, IdentifierTotpMfa:
+	case IdentifierSmsMfa, IdentifierTotpMfa, IdentifierYubiKey:
 		verifyCode := prompter.StringRequired("Enter verification code")
 		var verifyBody bytes.Buffer
 		json.NewEncoder(&verifyBody).Encode(VerifyRequest{AppID: appID, DeviceID: mfaDeviceID, StateToken: stateToken, OTPToken: verifyCode})
@@ -323,7 +330,7 @@ func verifyMFA(oc *Client, oauthToken, appID, resp string) (string, error) {
 		// loop until success, error, or timeout
 		for {
 			if time.Since(started) > time.Minute {
-				fmt.Println(" Timeout")
+				log.Println(" Timeout")
 				return "", errors.New("User did not accept MFA in time")
 			}
 
@@ -351,11 +358,11 @@ func verifyMFA(oc *Client, oauthToken, appID, resp string) (string, error) {
 				fmt.Print(".")
 
 			case TypeSuccess:
-				fmt.Println(" Approved")
+				log.Println(" Approved")
 				return gjson.Get(string(body), "data").String(), nil
 
 			default:
-				fmt.Println(" Error:")
+				log.Println(" Error:")
 				return "", errors.New("unsupported response from OneLogin, please raise ticket with saml2aws")
 			}
 		}

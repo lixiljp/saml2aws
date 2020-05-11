@@ -41,7 +41,7 @@ func New(idpAccount *cfg.IDPAccount) (*Client, error) {
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: idpAccount.SkipVerify, Renegotiation: tls.RenegotiateFreelyAsClient},
 	}
 
-	client, err := provider.NewHTTPClient(tr)
+	client, err := provider.NewHTTPClient(tr, provider.BuildHttpClientOpts(idpAccount))
 	if err != nil {
 		return nil, errors.Wrap(err, "error building http client")
 	}
@@ -124,7 +124,7 @@ func (ac *Client) Authenticate(loginDetails *creds.LoginDetails) (string, error)
 			if sel.Index() != -1 {
 				if instructions != sel.Text() {
 					instructions = sel.Text()
-					fmt.Println(instructions)
+					log.Println(instructions)
 				}
 			}
 			time.Sleep(1 * time.Second)

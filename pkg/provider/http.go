@@ -3,19 +3,19 @@ package provider
 import (
 	"crypto/tls"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
-	"os"
 	"runtime"
+	"strconv"
 	"time"
 
+	"github.com/avast/retry-go"
+	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
+	"github.com/versent/saml2aws/pkg/cfg"
 	"github.com/versent/saml2aws/pkg/cookiejar"
 	"github.com/versent/saml2aws/pkg/dump"
-
-	"github.com/briandowns/spinner"
-	"github.com/mattn/go-isatty"
-	"github.com/pkg/errors"
 	"golang.org/x/net/publicsuffix"
 )
 
@@ -23,6 +23,18 @@ import (
 type HTTPClient struct {
 	http.Client
 	CheckResponseStatus func(*http.Request, *http.Response) error
+	Options             *HTTPClientOptions
+}
+
+const (
+	DefaultAttemptsCount = 1
+	DefaultRetryDelay    = time.Duration(1) * time.Second
+)
+
+type HTTPClientOptions struct {
+	IsWithRetries bool //http retry feature switch
+	AttemptsCount uint
+	RetryDelay    time.Duration
 }
 
 // NewDefaultTransport configure a transport with the TLS skip verify option
@@ -42,8 +54,27 @@ func NewDefaultTransport(skipVerify bool) *http.Transport {
 	}
 }
 
+func BuildHttpClientOpts(account *cfg.IDPAccount) *HTTPClientOptions {
+	opts := &HTTPClientOptions{}
+	atmt, atmtErr := strconv.ParseUint(account.HttpAttemptsCount, 10, 0)
+	if opts.IsWithRetries = atmtErr == nil; opts.IsWithRetries {
+		opts.AttemptsCount = uint(atmt)
+	} else {
+		opts.AttemptsCount = DefaultAttemptsCount
+	}
+
+	delay, delayErr := strconv.ParseUint(account.HttpRetryDelay, 10, 0)
+	if delayErr != nil {
+		opts.RetryDelay = DefaultRetryDelay
+	} else {
+		opts.RetryDelay = time.Duration(delay) * time.Second
+	}
+
+	return opts
+}
+
 // NewHTTPClient configure the default http client used by the providers
-func NewHTTPClient(tr http.RoundTripper) (*HTTPClient, error) {
+func NewHTTPClient(tr http.RoundTripper, opts *HTTPClientOptions) (*HTTPClient, error) {
 
 	options := &cookiejar.Options{
 		PublicSuffixList: publicsuffix.List,
@@ -56,34 +87,23 @@ func NewHTTPClient(tr http.RoundTripper) (*HTTPClient, error) {
 
 	client := http.Client{Transport: tr, Jar: jar}
 
-	return &HTTPClient{client, nil}, nil
+	return &HTTPClient{client, nil, opts}, nil
 }
 
 // Do do the request
 func (hc *HTTPClient) Do(req *http.Request) (*http.Response, error) {
 
-	if isatty.IsTerminal(os.Stdout.Fd()) {
-		cs := spinner.CharSets[14]
-
-		// use a NON unicode spinner for windows
-		if runtime.GOOS == "windows" {
-			cs = spinner.CharSets[26]
-		}
-
-		if logrus.GetLevel() != logrus.DebugLevel {
-			s := spinner.New(cs, 100*time.Millisecond)
-			defer func() {
-				s.Stop()
-			}()
-			s.Start()
-		}
-	}
-
 	req.Header.Set("User-Agent", fmt.Sprintf("saml2aws/1.0 (%s %s) Versent", runtime.GOOS, runtime.GOARCH))
 
-	hc.logHTTPRequest(req)
+	var resp *http.Response
+	var err error
 
-	resp, err := hc.Client.Do(req)
+	if hc.Options.IsWithRetries {
+		resp, err = hc.doWithRetry(req)
+	} else {
+		hc.logHTTPRequest(req)
+		resp, err = hc.Client.Do(req)
+	}
 	if err != nil {
 		return resp, err
 	}
@@ -99,6 +119,32 @@ func (hc *HTTPClient) Do(req *http.Request) (*http.Response, error) {
 	hc.logHTTPResponse(resp)
 
 	return resp, err
+}
+
+func (hc *HTTPClient) doWithRetry(req *http.Request) (*http.Response, error) {
+	var resp *http.Response
+	err := retry.Do(
+		func() error {
+			hc.logHTTPRequest(req)
+			clientResp, err := hc.Client.Do(req)
+			if err != nil {
+				return err
+			}
+			resp = clientResp
+			return nil
+		},
+		retry.Attempts(hc.Options.AttemptsCount),
+		retry.Delay(hc.Options.RetryDelay),
+		retry.OnRetry(
+			func(n uint, err error) {
+				logrus.
+					WithField("Attempt #", n).
+					WithField("Caused by", fmt.Errorf("%v", err)).
+					Debug("Retry")
+			}),
+	)
+	return resp, err
+
 }
 
 // DisableFollowRedirect disable redirects
@@ -125,7 +171,7 @@ func SuccessOrRedirectResponseValidator(req *http.Request, resp *http.Response) 
 func (hc *HTTPClient) logHTTPRequest(req *http.Request) {
 
 	if dump.ContentEnable() {
-		fmt.Println(dump.RequestString(req))
+		log.Println(dump.RequestString(req))
 		return
 	}
 
@@ -138,7 +184,7 @@ func (hc *HTTPClient) logHTTPRequest(req *http.Request) {
 func (hc *HTTPClient) logHTTPResponse(resp *http.Response) {
 
 	if dump.ContentEnable() {
-		fmt.Println(dump.ResponseString(resp))
+		log.Println(dump.ResponseString(resp))
 		return
 	}
 

@@ -1,7 +1,7 @@
 package commands
 
 import (
-	"fmt"
+	"log"
 	"os"
 	"text/template"
 	"time"
@@ -24,8 +24,7 @@ set -gx AWS_SECRET_ACCESS_KEY {{ .AWSSecretKey }}
 set -gx AWS_SESSION_TOKEN {{ .AWSSessionToken }}
 set -gx AWS_SECURITY_TOKEN {{ .AWSSecurityToken }}
 set -gx SAML2AWS_PROFILE {{ .ProfileName }}
-set -gx AWS_CREDENTIAL_EXPIRATION={{ .Expires "2006-01-02T15:04:05Z07:00" }}
-"
+set -gx AWS_CREDENTIAL_EXPIRATION '{{ .Expires.Format "2006-01-02T15:04:05Z07:00" }}'
 `
 
 const powershellTmpl = `$env:AWS_ACCESS_KEY_ID='{{ .AWSAccessKey }}'
@@ -33,7 +32,7 @@ $env:AWS_SECRET_ACCESS_KEY='{{ .AWSSecretKey }}'
 $env:AWS_SESSION_TOKEN='{{ .AWSSessionToken }}'
 $env:AWS_SECURITY_TOKEN='{{ .AWSSecurityToken }}'
 $env:SAML2AWS_PROFILE='{{ .ProfileName }}'
-$env:AWS_CREDENTIAL_EXPIRATION='{{ .Expires "2006-01-02T15:04:05Z07:00" }}'
+$env:AWS_CREDENTIAL_EXPIRATION='{{ .Expires.Format "2006-01-02T15:04:05Z07:00" }}'
 `
 
 // Script will emit a bash script that will export environment variables
@@ -53,7 +52,7 @@ func Script(execFlags *flags.LoginExecFlags, shell string) error {
 		return errors.Wrap(err, "error loading credentials")
 	}
 	if !exist {
-		fmt.Println("unable to load credentials, login required to create them")
+		log.Println("unable to load credentials, login required to create them")
 		return nil
 	}
 
@@ -100,6 +99,6 @@ func buildTmpl(shell string, data interface{}) error {
 	if err != nil {
 		return err
 	}
-
+	// this is still written to stdout as per convention
 	return t.Execute(os.Stdout, data)
 }

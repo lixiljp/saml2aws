@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -26,7 +27,7 @@ type Client struct {
 }
 
 // Autogenerate startSAML Response struct
-// some case, some fiels is not exists
+// some case, some fields is not exists
 type startSAMLResponse struct {
 	FShowPersistentCookiesWarning         bool     `json:"fShowPersistentCookiesWarning"`
 	URLMsaLogout                          string   `json:"urlMsaLogout"`
@@ -200,7 +201,7 @@ type startSAMLResponse struct {
 }
 
 // Autogenerate password login response
-// some case, some fiels is not exists
+// some case, some fields is not exists
 type passwordLoginResponse struct {
 	ArrUserProofs []struct {
 		AuthMethodID string `json:"authMethodId"`
@@ -489,7 +490,7 @@ type mfaResponse struct {
 }
 
 // Autogenerate ProcessAuth response
-// some case, some fiels is not exists
+// some case, some fields is not exists
 type processAuthResponse struct {
 	IMaxStackForKnockoutAsyncComponents int    `json:"iMaxStackForKnockoutAsyncComponents"`
 	StrCopyrightTxt                     string `json:"strCopyrightTxt"`
@@ -612,7 +613,7 @@ func New(idpAccount *cfg.IDPAccount) (*Client, error) {
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: idpAccount.SkipVerify, Renegotiation: tls.RenegotiateFreelyAsClient},
 	}
 
-	client, err := provider.NewHTTPClient(tr)
+	client, err := provider.NewHTTPClient(tr, provider.BuildHttpClientOpts(idpAccount))
 	if err != nil {
 		return nil, errors.Wrap(err, "error building http client")
 	}
@@ -639,7 +640,7 @@ func (ac *Client) Authenticate(loginDetails *creds.LoginDetails) (string, error)
 		return samlAssertion, errors.Wrap(err, "error retrieving form")
 	}
 
-	// data is embeded javascript object
+	// data is embedded javascript object
 	// <script><![CDATA[  $Config=......; ]]>
 	resBody, _ := ioutil.ReadAll(res.Body)
 	resBodyStr := string(resBody)
@@ -693,7 +694,7 @@ func (ac *Client) Authenticate(loginDetails *creds.LoginDetails) (string, error)
 		resBodyStr = string(resBody)
 	}
 
-	// data is embeded javascript object
+	// data is embedded javascript object
 	// <script><![CDATA[  $Config=......; ]]>
 	var loginPasswordJson string
 	if strings.Contains(resBodyStr, "$Config") {
@@ -787,7 +788,7 @@ func (ac *Client) Authenticate(loginDetails *creds.LoginDetails) (string, error)
 				mfaReq.AdditionalAuthData = verifyCode
 			}
 			if mfaReq.AuthMethodID == "PhoneAppNotification" && i == 0 {
-				fmt.Println("Phone approval required.")
+				log.Println("Phone approval required.")
 			}
 			mfaReqJson, err := json.Marshal(mfaReq)
 			if err != nil {
@@ -926,7 +927,7 @@ func (ac *Client) Authenticate(loginDetails *creds.LoginDetails) (string, error)
 
 	oidcResponseStr := string(oidcResponse)
 
-	// data is embeded javascript
+	// data is embedded javascript
 	// window.location = 'https:/..../?SAMLRequest=......'
 	oidcResponseList := strings.Split(oidcResponseStr, ";")
 	var SAMLRequestURL string
