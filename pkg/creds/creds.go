@@ -12,6 +12,7 @@ type LoginDetails struct {
 	DuoMFAOption string
 	URL          string
 	StateToken   string // used by Okta
+	SaveIDPAccountAfterLogin bool
 }
 
 // Validate validate the login details

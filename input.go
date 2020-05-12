@@ -27,6 +27,9 @@ func PromptForConfigurationDetails(idpAccount *cfg.IDPAccount) error {
 
 	// only prompt for MFA if there is more than one option
 	if len(mfas) > 1 {
+		if idpAccount.MFA == "" {
+			idpAccount.MFA = mfas[0]
+		}
 		idpAccount.MFA, err = prompter.ChooseWithDefault("Please choose an MFA", idpAccount.MFA, mfas)
 		if err != nil {
 			return errors.Wrap(err, "error selecting provider file")

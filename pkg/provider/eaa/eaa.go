@@ -26,7 +26,7 @@ import (
 // Client is a wrapper representing a EAA SAML client
 type Client struct {
 	client      *provider.HTTPClient
-	mfa         string
+	idpAccount  *cfg.IDPAccount
 	host        string // hostname of login url
 	navigatorId string // dummy browser fingerprint
 	requireMFABeforeListApp bool
@@ -127,7 +127,7 @@ func New(idpAccount *cfg.IDPAccount) (*Client, error) {
 	tr := provider.NewDefaultTransport(idpAccount.SkipVerify)
 
 	// http client will create with cookie jar which required by EAA
-	client, err := provider.NewHTTPClient(tr)
+	client, err := provider.NewHTTPClient(tr, provider.BuildHttpClientOpts(idpAccount))
 	if err != nil {
 		return nil, errors.Wrap(err, "error building http client")
 	}
@@ -137,7 +137,7 @@ func New(idpAccount *cfg.IDPAccount) (*Client, error) {
 
 	return &Client{
 		client: client,
-		mfa:    idpAccount.MFA,
+		idpAccount: idpAccount,
 	}, nil
 }
 
@@ -281,16 +281,31 @@ func (c *Client) GetAppInfo(loginInfo *LoginInfo) (AppInfo, error) {
 		return appInfo, errors.Wrap(err, "error unmarshaling json of apps")
 	}
 
+	// use last app
 	var appOptions []string
 	for _, app := range appsResponse.Apps {
-		appOptions = append(appOptions, app.Name)
+		if app.Name == c.idpAccount.AppID {
+			appOptions = append(appOptions, app.Name)
+		}
+	}
+	for _, app := range appsResponse.Apps {
+		if app.Name != c.idpAccount.AppID {
+			appOptions = append(appOptions, app.Name)
+		}
 	}
 	if len(appOptions) == 0 {
 		return appInfo, errors.New("No apps available")
 	}
 
 	var appOption = prompter.Choose("Select which app to use", appOptions)
-	appInfo = appsResponse.Apps[appOption]
+	for _, app := range appsResponse.Apps {
+		if app.Name == appOptions[appOption] {
+			appInfo = app
+		}
+	}
+
+	// remember last app
+	c.idpAccount.AppID = appInfo.Name
 
 	return appInfo, nil
 }
@@ -418,26 +433,33 @@ func (c *Client) GetMFAInfo(loginInfo *LoginInfo) (MFAInfo, error) {
 		return mfaInfo, errors.Wrap(err, "error unmarshaling json of MFA settings")
 	}
 
-	mfaOption := strings.ToLower(c.mfa)
+	mfaOption := strings.ToLower(c.idpAccount.MFA)
 	if mfaOption == "auto" {
-		mfaOption = mfaSettingsResponse.MFA.Settings["preferred"].
+		option, ok := mfaSettingsResponse.MFA.Settings["preferred"].
 			(map[string]interface{})["option"].(string)
+		if !ok {
+			return mfaInfo, errors.New("preferred MFA option not found")
+		}
+		mfaOption = option
 	}
 
 	if mfaOption == "sms" {
+		smsArr, ok := mfaSettingsResponse.MFA.Settings["sms"].([]interface{})
+		if !ok {
+			return mfaInfo, errors.New("sms MFA option not available")
+		}
 		mfaInfo.Option = "phone"
-		mfaInfo.UUID = mfaSettingsResponse.MFA.Settings["sms"].
-			([]interface{})[0].
-			(map[string]interface{})["uuid"].(string)
+		mfaInfo.UUID = smsArr[0].(map[string]interface{})["uuid"].(string)
 		mfaInfo.Target = "phone"
 	} else if mfaOption == "totp" {
+		totpArr, ok := mfaSettingsResponse.MFA.Settings["totp"].([]interface{})
+		if !ok {
+			return mfaInfo, errors.New("totp MFA option not available")
+		}
 		mfaInfo.Option = "totp"
-		mfaInfo.UUID = mfaSettingsResponse.MFA.Settings["totp"].
-			([]interface{})[0].
-			(map[string]interface{})["uuid"].(string)
-		if mfaTarget, ok := mfaSettingsResponse.MFA.Settings["totp"].
-			([]interface{})[0].
-			(map[string]interface{})["value"]; ok {
+		mfaInfo.UUID = totpArr[0].(map[string]interface{})["uuid"].(string)
+		mfaTarget, ok := totpArr[0].(map[string]interface{})["value"]
+		if ok {
 			mfaInfo.Target = mfaTarget.(string)
 		} else {
 			mfaInfo.Target = mfaInfo.UUID
@@ -650,6 +672,9 @@ func (c *Client) Authenticate(loginDetails *creds.LoginDetails) (string, error) 
 	}
 
 	logger.WithField("saml", samlAssertion).Debug("the saml assertion")
+
+	// Remember last app
+	loginDetails.SaveIDPAccountAfterLogin = true
 
 	return samlAssertion, nil
 }

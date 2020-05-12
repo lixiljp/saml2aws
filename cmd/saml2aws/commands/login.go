@@ -87,6 +87,18 @@ func Login(loginFlags *flags.LoginExecFlags) error {
 		}
 	}
 
+	if loginDetails.SaveIDPAccountAfterLogin {
+		cfgm, err := cfg.NewConfigManager(cfg.DefaultConfigPath)
+		if err != nil {
+			return errors.Wrap(err, "failed to create config manager")
+		}
+
+		err = cfgm.SaveIDPAccount(loginFlags.CommonFlags.IdpAccount, account)
+		if err != nil {
+			return errors.Wrap(err, "failed to save idp account")
+		}
+	}
+
 	role, err := selectAwsRole(samlAssertion, account)
 	if err != nil {
 		return errors.Wrap(err, "Failed to assume role, please check whether you are permitted to assume the given role for the AWS service")
