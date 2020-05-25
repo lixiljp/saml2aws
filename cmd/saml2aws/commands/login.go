@@ -221,7 +221,10 @@ func resolveRole(awsRoles []*saml2aws.AWSRole, samlAssertion string, account *cf
 
 	if len(awsRoles) == 1 {
 		if account.RoleARN != "" {
-			return saml2aws.LocateRole(awsRoles, account.RoleARN)
+			role, err := saml2aws.LocateRole(awsRoles, account.RoleARN)
+			if err == nil {
+				return role, nil
+			}
 		}
 		return awsRoles[0], nil
 	} else if len(awsRoles) == 0 {
@@ -249,7 +252,10 @@ func resolveRole(awsRoles []*saml2aws.AWSRole, samlAssertion string, account *cf
 	saml2aws.AssignPrincipals(awsRoles, awsAccounts)
 
 	if account.RoleARN != "" {
-		return saml2aws.LocateRole(awsRoles, account.RoleARN)
+		role, err := saml2aws.LocateRole(awsRoles, account.RoleARN)
+		if err == nil {
+			return role, nil
+		}
 	}
 
 	for {
